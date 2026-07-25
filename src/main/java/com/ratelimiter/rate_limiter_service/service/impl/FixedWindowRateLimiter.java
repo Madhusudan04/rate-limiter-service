@@ -8,57 +8,50 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.time.Duration;
-import java.time.LocalTime;
+import java.time.Instant;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
 public class FixedWindowRateLimiter implements RateLimiterService {
 
-    ConcurrentHashMap<String, Map<String, Bucket>> bucketMap = new ConcurrentHashMap<>();
+    Map<String, Map<String, Bucket>> bucketMap = new ConcurrentHashMap<>();
 
-    @Value("${maxTokens}")
+    @Value("${maxTokens:4}")
     private int maxTokens;
 
-    public CheckResponse fixedWindowRateLimiter(CheckRequest request){
-        LocalTime currentTime = LocalTime.now();
+    @Value("${windowSeconds:60}")
+    private int windowSeconds;
+
+    public CheckResponse allow(CheckRequest request){
+        Instant currentTime = Instant.now();
         String clientId = request.getClientId();
         String endpoint = request.getEndpoint();
         CheckResponse response = new CheckResponse();
         response.setAllowed(true);
-            if(bucketMap.containsKey(clientId)){
-                Bucket existingBucket = bucketMap.get(clientId).get(endpoint);
-                if(existingBucket == null){
-                    Bucket newBucket = new Bucket(maxTokens - 1, currentTime);
-                    bucketMap.get(clientId).put(endpoint, newBucket);
-                    response.setRemaining(newBucket.getToken());
-                    return response;
-                }
-                synchronized (existingBucket){
-                    if(currentTime.isAfter(existingBucket.getLocalTime().plusMinutes(1))){
-                        existingBucket.setToken(maxTokens);
-                        existingBucket.setLocalTime(existingBucket.getLocalTime().plusMinutes(1));
-                    }
-                    if(existingBucket.getToken() == 0){
-                        long elapsed = Duration.between(existingBucket.getLocalTime(), currentTime).getSeconds();
-                        response.setRetryAfter(Math.max(0, 60 - elapsed));
-                        response.setAllowed(false);
-                        return response;
-                    }
-                    existingBucket.setToken(existingBucket.getToken()-1);
-                    response.setRemaining(existingBucket.getToken());
-                    bucketMap.get(clientId).put(endpoint,existingBucket);
-                }
 
-            }else {
-                Bucket newBucket = new Bucket(maxTokens-1,currentTime);
-                bucketMap.computeIfAbsent(clientId, k -> {
-                    Map<String, Bucket> endpointMap = new ConcurrentHashMap<>();
-                    endpointMap.put(endpoint, newBucket);
-                    return endpointMap;
-                });
-                response.setRemaining(newBucket.getToken());
+        Map<String, Bucket> endpointMap = bucketMap.computeIfAbsent(clientId, k -> new ConcurrentHashMap<>());
+
+        Bucket bucket = endpointMap.computeIfAbsent(endpoint, k -> new Bucket(maxTokens,currentTime));
+
+        synchronized (bucket){
+            Instant  windowStart = bucket.getLocalTime();
+            Instant  windowEnd = windowStart.plusSeconds(windowSeconds);
+
+            if(currentTime.isAfter(windowEnd)){
+                bucket.setLocalTime(currentTime);
+                bucket.setToken(maxTokens);
             }
+
+            if(bucket.getToken() <= 0){
+                long retryAfterSeconds = Duration.between(currentTime, windowEnd).getSeconds();
+                response.setAllowed(false);
+                response.setRetryAfter((int) Math.max(0, retryAfterSeconds));
+            }else{
+                bucket.setToken(bucket.getToken() - 1);
+                response.setRemaining(bucket.getToken());
+            }
+        }
 
         return response;
     }

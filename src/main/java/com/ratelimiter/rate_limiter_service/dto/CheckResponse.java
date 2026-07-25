@@ -11,7 +11,7 @@ public class CheckResponse {
 
     boolean allowed;
 
-    int remaining;
+    double remaining;
 
     long retryAfter;
 
