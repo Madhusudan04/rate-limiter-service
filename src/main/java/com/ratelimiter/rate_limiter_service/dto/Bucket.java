@@ -10,6 +10,6 @@ import java.time.Instant;
 @NoArgsConstructor
 @AllArgsConstructor
 public class Bucket {
-    int token;
-    Instant localTime;
+    private int token;
+    private Instant localTime;
 }

@@ -3,7 +3,7 @@ package com.ratelimiter.rate_limiter_service.service.impl;
 import com.ratelimiter.rate_limiter_service.dto.CheckRequest;
 import com.ratelimiter.rate_limiter_service.dto.CheckResponse;
 import com.ratelimiter.rate_limiter_service.dto.TokenBucket;
-import com.ratelimiter.rate_limiter_service.service.RateLimiterService;
+import com.ratelimiter.rate_limiter_service.service.RateLimiter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -13,7 +13,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
-public class TokenBucketRateLimiter implements RateLimiterService {
+public class TokenBucketRateLimiter implements RateLimiter {
 
     private final Map<String, Map<String, TokenBucket>> tokenBucketMap = new ConcurrentHashMap<>();
 
@@ -71,4 +71,10 @@ public class TokenBucketRateLimiter implements RateLimiterService {
 
         return response;
     }
+
+    @Override
+    public String getAlgorithmName() {
+        return "TOKEN_BUCKET";
+    }
+
 }

@@ -9,8 +9,8 @@ import lombok.NoArgsConstructor;
 @NoArgsConstructor
 public class CheckRequest {
 
-    String clientId;
-
-    String endpoint;
+    private String clientId;
+    private String endpoint;
+    private String algorithm;
 
 }
