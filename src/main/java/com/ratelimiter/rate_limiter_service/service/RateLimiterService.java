@@ -5,5 +5,5 @@ import com.ratelimiter.rate_limiter_service.dto.CheckResponse;
 
 public interface RateLimiterService {
 
-    CheckResponse fixedWindowRateLimiter(CheckRequest request);
+    CheckResponse allow(CheckRequest request);
 }
