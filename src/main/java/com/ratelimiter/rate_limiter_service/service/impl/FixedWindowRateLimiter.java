@@ -3,7 +3,7 @@ package com.ratelimiter.rate_limiter_service.service.impl;
 import com.ratelimiter.rate_limiter_service.dto.CheckRequest;
 import com.ratelimiter.rate_limiter_service.dto.CheckResponse;
 import com.ratelimiter.rate_limiter_service.dto.Bucket;
-import com.ratelimiter.rate_limiter_service.service.RateLimiterService;
+import com.ratelimiter.rate_limiter_service.service.RateLimiter;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -13,7 +13,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Service
-public class FixedWindowRateLimiter implements RateLimiterService {
+public class FixedWindowRateLimiter implements RateLimiter {
 
     Map<String, Map<String, Bucket>> bucketMap = new ConcurrentHashMap<>();
 
@@ -39,8 +39,9 @@ public class FixedWindowRateLimiter implements RateLimiterService {
             Instant  windowEnd = windowStart.plusSeconds(windowSeconds);
 
             if(currentTime.isAfter(windowEnd)){
-                bucket.setLocalTime(currentTime);
+                bucket.setLocalTime(windowEnd);
                 bucket.setToken(maxTokens);
+                windowEnd = windowEnd.plusSeconds(windowSeconds);
             }
 
             if(bucket.getToken() <= 0){
@@ -55,4 +56,10 @@ public class FixedWindowRateLimiter implements RateLimiterService {
 
         return response;
     }
+
+    @Override
+    public String getAlgorithmName() {
+        return "FIXED_WINDOW";
+    }
+
 }

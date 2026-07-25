@@ -10,6 +10,6 @@ import java.time.Instant;
 @NoArgsConstructor
 @AllArgsConstructor
 public class TokenBucket {
-    double token;
-    Instant lastRefillTime;
+    private double token;
+    private Instant lastRefillTime;
 }

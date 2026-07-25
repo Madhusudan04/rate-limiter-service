@@ -9,10 +9,8 @@ import lombok.NoArgsConstructor;
 @AllArgsConstructor
 public class CheckResponse {
 
-    boolean allowed;
-
-    double remaining;
-
-    long retryAfter;
+    private boolean allowed;
+    private double remaining;
+    private long retryAfter;
 
 }
