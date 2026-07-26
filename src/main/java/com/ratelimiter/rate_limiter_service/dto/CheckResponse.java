@@ -12,5 +12,6 @@ public class CheckResponse {
     private boolean allowed;
     private double remaining;
     private long retryAfter;
+    private String message;
 
 }
