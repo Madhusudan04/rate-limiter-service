@@ -67,8 +67,13 @@ public class LeakyBucketRateLimiter implements RateLimiter {
 
         synchronized (bucket) {
             boolean accepted = bucket.getQueue().offer(request);
+
             if (!accepted) {
+                long intervalMs = 1000L / outflowRate;
+                int retryAfterSeconds = (int) Math.ceil(intervalMs / 1000.0);
+
                 response.setAllowed(false);
+                response.setRetryAfter(Math.max(1, retryAfterSeconds)); // ✅ now set
                 response.setMessage("Queue full, request dropped");
                 return response;
             }
@@ -92,31 +97,39 @@ public class LeakyBucketRateLimiter implements RateLimiter {
     }
 
     private void startDrainer(LeakyBucket bucket) {
-        long intervalMs = 20000L / outflowRate;
+        long intervalMs = 1000L / outflowRate;
 
         ScheduledFuture<?> future = scheduler.scheduleAtFixedRate(
                 () -> {
                     try {
                         CheckRequest request = bucket.getQueue().poll();
-                        assert request != null;
-                        log.info("Request processed: {}", request.getEndpoint());
-                        // queue empty → stop drainer cleanly
+
+                        // queue empty → stop drainer
+                        if (request == null) {
+                            synchronized (bucket) {
+                                bucket.setDrainerStarted(false);
+                            }
+                            bucket.getDrainerFuture().cancel(false);
+                            return;
+                        }
+
+                        log.info("Request processed: clientId={}, endpoint={}",
+                                request.getClientId(), request.getEndpoint());
+
+                        // check again after poll
                         if (bucket.getQueue().isEmpty()) {
                             synchronized (bucket) {
                                 bucket.setDrainerStarted(false);
                             }
-                            // cancel itself — clean stop, no exception
                             bucket.getDrainerFuture().cancel(false);
                         }
                     } catch (Exception e) {
-                        System.err.println("Drainer error: " + e.getMessage());
+                        log.error("Drainer error: {}", e.getMessage());
                     }
                 },
                 intervalMs, intervalMs, TimeUnit.MILLISECONDS
         );
 
-        // store reference in bucket so drainer can cancel itself
         bucket.setDrainerFuture(future);
     }
-
 }
