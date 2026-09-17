@@ -17,7 +17,6 @@ public class RateLimitController {
     @Autowired
     private RateLimiterService rateLimiterService;
 
-
     @PostMapping("/api/v1/check")
     ResponseEntity<CheckResponse> rateLimiter(@RequestBody CheckRequest request){
         CheckResponse response = rateLimiterService.check(request);
