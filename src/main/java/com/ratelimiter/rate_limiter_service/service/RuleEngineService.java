@@ -4,6 +4,7 @@ import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ratelimiter.rate_limiter_service.dto.Rule;
 import jakarta.annotation.PostConstruct;
+import jakarta.annotation.PreDestroy;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -16,6 +17,10 @@ import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.ScheduledFuture;
+import java.util.concurrent.TimeUnit;
 
 @Service
 public class RuleEngineService {
@@ -23,6 +28,8 @@ public class RuleEngineService {
     private final ObjectMapper objectMapper = new ObjectMapper();
     private final Path storagePath;
     private final List<Rule> rules = new CopyOnWriteArrayList<>();
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor();
+    private volatile ScheduledFuture<?> pendingWrite;
 
     public RuleEngineService(@Value("${rule.engine.storage.file:rules.json}") String storageFile) {
         this.storagePath = Path.of(storageFile);
@@ -41,7 +48,7 @@ public class RuleEngineService {
         Rule normalized = normalizeRule(rule);
         rules.removeIf(existing -> Objects.equals(existing.getId(), normalized.getId()));
         rules.add(normalized);
-        persistRules();
+        schedulePersist();
         return normalized;
     }
 
@@ -71,23 +78,21 @@ public class RuleEngineService {
         String normalizedEndpoint = normalizeValue(endpoint);
 
         Optional<Rule> exact = rules.stream()
-                .filter(rule -> isRuleMatch(rule, normalizedClient, normalizedEndpoint, true))
+                .filter(rule -> isExactClientEndpointMatch(rule, normalizedClient, normalizedEndpoint))
                 .findFirst();
         if (exact.isPresent()) {
             return exact.get();
         }
 
         Optional<Rule> clientOnly = rules.stream()
-                .filter(rule -> isRuleMatch(rule, normalizedClient, normalizedEndpoint, false))
-                .filter(rule -> rule.getEndpoint() == null || rule.getEndpoint().isBlank() || "*".equals(rule.getEndpoint()))
+                .filter(rule -> isClientLevelMatch(rule, normalizedClient, normalizedEndpoint))
                 .findFirst();
         if (clientOnly.isPresent()) {
             return clientOnly.get();
         }
 
         Optional<Rule> endpointOnly = rules.stream()
-                .filter(rule -> rule.getClientId() == null || rule.getClientId().isBlank() || "*".equals(rule.getClientId()))
-                .filter(rule -> isEndpointMatch(rule.getEndpoint(), normalizedEndpoint))
+                .filter(rule -> isEndpointLevelMatch(rule, normalizedClient, normalizedEndpoint))
                 .findFirst();
         if (endpointOnly.isPresent()) {
             return endpointOnly.get();
@@ -101,29 +106,45 @@ public class RuleEngineService {
 
     public void deleteRule(String id) {
         rules.removeIf(rule -> Objects.equals(rule.getId(), id));
-        persistRules();
+        schedulePersist();
     }
 
     public Rule updateRule(String id, Rule updatedRule) {
+        if (id == null || id.isBlank()) {
+            throw new IllegalArgumentException("Rule id must not be blank");
+        }
+        if (updatedRule == null) {
+            throw new IllegalArgumentException("Rule cannot be null");
+        }
+
+        boolean found = false;
         Rule normalized = normalizeRule(updatedRule);
         normalized.setId(id);
         for (int i = 0; i < rules.size(); i++) {
             if (Objects.equals(rules.get(i).getId(), id)) {
                 rules.set(i, normalized);
-                persistRules();
-                return normalized;
+                found = true;
+                break;
             }
         }
-        throw new IllegalArgumentException("Rule not found: " + id);
+        if (!found) {
+            throw new IllegalArgumentException("Rule not found: " + id);
+        }
+        schedulePersist();
+        return normalized;
     }
 
     public void loadRules() {
         try {
             if (Files.notExists(storagePath)) {
+                Files.createDirectories(storagePath.getParent() == null ? Path.of(".") : storagePath.getParent());
+                Files.createFile(storagePath);
+                objectMapper.writerWithDefaultPrettyPrinter().writeValue(storagePath.toFile(), new ArrayList<Rule>());
                 return;
             }
             String content = Files.readString(storagePath);
             if (content == null || content.isBlank()) {
+                objectMapper.writerWithDefaultPrettyPrinter().writeValue(storagePath.toFile(), new ArrayList<Rule>());
                 return;
             }
             List<Rule> loaded = objectMapper.readValue(content, new TypeReference<>() {});
@@ -141,6 +162,22 @@ public class RuleEngineService {
         } catch (IOException ex) {
             throw new IllegalStateException("Unable to store rules to " + storagePath, ex);
         }
+    }
+
+    private void schedulePersist() {
+        if (pendingWrite != null) {
+            pendingWrite.cancel(false);
+        }
+        pendingWrite = scheduler.schedule(this::persistRules, 5, TimeUnit.SECONDS);
+    }
+
+    @PreDestroy
+    public void shutdown() {
+        if (pendingWrite != null) {
+            pendingWrite.cancel(false);
+        }
+        persistRules();
+        scheduler.shutdown();
     }
 
     private void seedDefaultRules() {
@@ -171,45 +208,64 @@ public class RuleEngineService {
     }
 
     private boolean isDefaultRule(Rule rule) {
-        return (rule.getClientId() == null || rule.getClientId().isBlank() || "*".equals(rule.getClientId()))
-                && (rule.getEndpoint() == null || rule.getEndpoint().isBlank() || "*".equals(rule.getEndpoint()));
+        return (rule.getClientId() == null || rule.getClientId().isBlank() || "*".equalsIgnoreCase(rule.getClientId()))
+                && (rule.getEndpoint() == null || rule.getEndpoint().isBlank() || "*".equalsIgnoreCase(rule.getEndpoint()));
     }
 
-    private boolean isRuleMatch(Rule rule, String clientId, String endpoint, boolean requireExactEndpoint) {
+    private boolean isExactClientEndpointMatch(Rule rule, String clientId, String endpoint) {
         if (rule == null) {
             return false;
         }
-
-        boolean clientMatches = matchesPattern(rule.getClientId(), clientId, true);
-        boolean endpointMatches = matchesPattern(rule.getEndpoint(), endpoint, requireExactEndpoint);
-        return clientMatches && endpointMatches;
+        return matchesExact(rule.getClientId(), clientId)
+                && matchesExact(rule.getEndpoint(), endpoint);
     }
 
-    private boolean matchesPattern(String pattern, String value, boolean exact) {
-        if (pattern == null || pattern.isBlank() || "*".equals(pattern)) {
-            return true;
-        }
-        if (value == null || value.isBlank()) {
+    private boolean isClientLevelMatch(Rule rule, String clientId, String endpoint) {
+        if (rule == null) {
             return false;
         }
-        if (exact) {
-            return pattern.equals(value);
-        }
-        return isEndpointMatch(pattern, value);
+        return matchesExact(rule.getClientId(), clientId)
+                && isWildcard(rule.getEndpoint())
+                && !isDefaultRule(rule);
     }
 
-    private boolean isEndpointMatch(String pattern, String endpoint) {
-        if (pattern == null || pattern.isBlank() || "*".equals(pattern)) {
+    private boolean isEndpointLevelMatch(Rule rule, String clientId, String endpoint) {
+        if (rule == null) {
+            return false;
+        }
+        return isWildcard(rule.getClientId())
+                && matchesEndpoint(rule.getEndpoint(), endpoint)
+                && !isDefaultRule(rule);
+    }
+
+    private boolean matchesExact(String pattern, String value) {
+        if (pattern == null || pattern.isBlank()) {
+            return value == null || value.isBlank();
+        }
+        if ("*".equalsIgnoreCase(pattern)) {
+            return false;
+        }
+        return value != null && !value.isBlank() && pattern.equalsIgnoreCase(value);
+    }
+
+    private boolean matchesEndpoint(String pattern, String endpoint) {
+        if (pattern == null || pattern.isBlank() || "*".equalsIgnoreCase(pattern)) {
             return true;
         }
         if (endpoint == null || endpoint.isBlank()) {
             return false;
         }
-        if (pattern.endsWith("/*")) {
-            String prefix = pattern.substring(0, pattern.length() - 1);
-            return endpoint.startsWith(prefix);
+        String normalizedPattern = pattern.trim();
+        String normalizedEndpoint = endpoint.trim();
+        if (normalizedPattern.endsWith("/*")) {
+            String prefix = normalizedPattern.substring(0, normalizedPattern.length() - 1);
+            return normalizedEndpoint.regionMatches(true, 0, prefix, 0, prefix.length());
         }
-        return pattern.equals(endpoint);
+        return normalizedPattern.equalsIgnoreCase(normalizedEndpoint);
+    }
+
+    private boolean isWildcard(String value) {
+        return value == null || value.isBlank() || "*".equalsIgnoreCase(value);
     }
 
     private String normalizeValue(String value) {
