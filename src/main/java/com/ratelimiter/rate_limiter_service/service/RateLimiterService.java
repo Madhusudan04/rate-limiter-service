@@ -28,6 +28,17 @@ public class RateLimiterService {
         }
     }
 
+    /**
+     * Checks if a request from a client to an endpoint is allowed under the rate limit.
+     *
+     * The method resolves the applicable rate limit rule based on clientId and endpoint
+     * priority matching, selects the appropriate rate limiting algorithm, and checks the
+     * request count against the limit using the configured storage backend (Redis with
+     * circuit breaker fallback to in-memory storage).
+     *
+     * @param request the check request containing clientId and endpoint
+     * @return CheckResponse with allowed flag, remaining capacity, and retry-after time
+     */
     public CheckResponse check(CheckRequest request) {
         if (request == null || request.getClientId() == null || request.getClientId().isBlank()
                 || request.getEndpoint() == null || request.getEndpoint().isBlank()) {
@@ -74,6 +85,12 @@ public class RateLimiterService {
         return response;
     }
 
+    /**
+     * Verifies whether the provided algorithm name is supported by this service.
+     *
+     * @param algorithm the algorithm name to check, such as "TOKEN_BUCKET" or "FIXED_WINDOW"
+     * @return true if the algorithm is implemented and available, false otherwise
+     */
     public boolean supportsAlgorithm(String algorithm) {
         return algorithm != null
                 && !algorithm.isBlank()

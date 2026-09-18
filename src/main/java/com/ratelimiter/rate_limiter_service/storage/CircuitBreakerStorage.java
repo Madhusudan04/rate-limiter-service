@@ -35,6 +35,20 @@ public class CircuitBreakerStorage implements RateLimiterStorage {
         this.openedAtMillis = 0L;
     }
 
+/**
+     * Evaluates whether a request should be allowed under the rate limit,
+     * using Redis as the primary storage with automatic fallback to in-memory
+     * storage when Redis becomes unavailable.
+     *
+     * States:
+     * - CLOSED: Redis is healthy, use Redis storage
+     * - OPEN: Redis failed repeatedly, use in-memory fallback for a short cool-down
+     * - HALF_OPEN: testing Redis recovery before returning to CLOSED
+     *
+     * @param key the rate limit key, typically formatted as "clientId:endpoint:algorithm"
+     * @param limit the maximum allowed requests in the window
+     * @return true when the request is allowed, false when the limit is exceeded
+     */
     @Override
     public boolean allow(String key, int limit) {
         if (state.get() == CircuitState.OPEN) {

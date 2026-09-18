@@ -53,6 +53,19 @@ public class RuleEngineService {
         return rules.stream().filter(rule -> Objects.equals(rule.getId(), id)).findFirst();
     }
 
+/**
+     * Finds the most specific matching rule for a given client and endpoint.
+     *
+     * Rule priority is evaluated from most specific to least specific:
+     * 1. clientId + endpoint exact match
+     * 2. clientId only match
+     * 3. endpoint only match
+     * 4. default wildcard rule
+     *
+     * @param clientId the client identifier, such as "user-123"
+     * @param endpoint the endpoint path, such as "/api/checkout"
+     * @return the matching Rule, falling back to the default rule when necessary
+     */
     public Rule findRule(String clientId, String endpoint) {
         String normalizedClient = normalizeValue(clientId);
         String normalizedEndpoint = normalizeValue(endpoint);
