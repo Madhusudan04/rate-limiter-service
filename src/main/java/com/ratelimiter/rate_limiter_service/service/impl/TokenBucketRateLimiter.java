@@ -4,6 +4,7 @@ import com.ratelimiter.rate_limiter_service.dto.CheckRequest;
 import com.ratelimiter.rate_limiter_service.dto.CheckResponse;
 import com.ratelimiter.rate_limiter_service.dto.TokenBucket;
 import com.ratelimiter.rate_limiter_service.service.RateLimiter;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -23,6 +24,14 @@ public class TokenBucketRateLimiter implements RateLimiter {
     @Value("${windowSeconds:60}")
     private int windowSeconds;
 
+    @PostConstruct
+    void validateConfiguration() {
+        if (maxTokens <= 0 || windowSeconds <= 0) {
+            throw new IllegalStateException(
+                    "maxTokensForTokenBucket and windowSeconds must be greater than zero");
+        }
+    }
+
     @Override
     public CheckResponse allow(CheckRequest request) {
         Instant now = Instant.now();
@@ -30,7 +39,6 @@ public class TokenBucketRateLimiter implements RateLimiter {
         String clientId = request.getClientId();
 
         CheckResponse response = new CheckResponse();
-        response.setAllowed(true);
 
         Map<String, TokenBucket> endpointMap =
                 tokenBucketMap.computeIfAbsent(clientId, k -> new ConcurrentHashMap<>());
@@ -59,13 +67,17 @@ public class TokenBucketRateLimiter implements RateLimiter {
                 double refillRatePerSecond = maxTokens / windowSeconds;
                 double missingTokens = 1.0 - availableTokens;
                 int retryAfter = (int) Math.ceil(missingTokens / refillRatePerSecond);
-                response.setRetryAfter(Math.max(0, retryAfter));
+                response.setRetryAfter(Math.max(1, retryAfter));
+                response.setMessage("Rate limit exceeded");
             } else {
+                response.setAllowed(true);
                 tokenBucket.setToken(availableTokens - 1.0);
                 if (tokenBucket.getToken() < 1e-9) {
                     tokenBucket.setToken(0.0);
                 }
                 response.setRemaining(tokenBucket.getToken());
+                response.setRetryAfter(0);
+                response.setMessage("Request allowed");
             }
         }
 

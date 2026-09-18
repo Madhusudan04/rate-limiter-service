@@ -14,4 +14,8 @@ public class CheckResponse {
     private long retryAfter;
     private String message;
 
+    public static CheckResponse invalidRequest(String message) {
+        return new CheckResponse(false, 0, 0, message);
+    }
+
 }

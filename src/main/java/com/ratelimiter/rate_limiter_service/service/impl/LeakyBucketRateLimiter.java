@@ -16,6 +16,7 @@ import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
 @Service
@@ -35,6 +36,11 @@ public class LeakyBucketRateLimiter implements RateLimiter {
 
     @PostConstruct
     public void init(){
+        if (bucketSize <= 0 || outflowRate <= 0 || outflowRate > 1000 || schedulerPoolSize <= 0) {
+            throw new IllegalStateException(
+                    "leakyBucketSize, outflowRate, and schedulerPoolSize must be positive; "
+                            + "outflowRate must not exceed 1000");
+        }
         scheduler = Executors.newScheduledThreadPool(schedulerPoolSize);
     }
 
@@ -57,7 +63,6 @@ public class LeakyBucketRateLimiter implements RateLimiter {
         String endPoint = request.getEndpoint();
 
         CheckResponse response = new CheckResponse();
-        response.setAllowed(true);
 
         ConcurrentHashMap<String, LeakyBucket> leakyBucketMap =
                 bucketMap.computeIfAbsent(clientId, k -> new ConcurrentHashMap<>());
@@ -73,7 +78,8 @@ public class LeakyBucketRateLimiter implements RateLimiter {
                 int retryAfterSeconds = (int) Math.ceil(intervalMs / 1000.0);
 
                 response.setAllowed(false);
-                response.setRetryAfter(Math.max(1, retryAfterSeconds)); // ✅ now set
+                response.setRemaining(0);
+                response.setRetryAfter(Math.max(1, retryAfterSeconds));
                 response.setMessage("Queue full, request dropped");
                 return response;
             }
@@ -83,8 +89,10 @@ public class LeakyBucketRateLimiter implements RateLimiter {
                 bucket.setDrainerStarted(true);
             }
 
+            response.setAllowed(true);
             int queueSpotsLeft = bucketSize - bucket.getQueue().size();
             response.setRemaining(queueSpotsLeft);
+            response.setRetryAfter(0);
             response.setMessage("Request queued. Queue spots remaining: " + queueSpotsLeft);
         }
 
@@ -98,38 +106,42 @@ public class LeakyBucketRateLimiter implements RateLimiter {
 
     private void startDrainer(LeakyBucket bucket) {
         long intervalMs = 1000L / outflowRate;
+        AtomicReference<ScheduledFuture<?>> futureReference = new AtomicReference<>();
 
         ScheduledFuture<?> future = scheduler.scheduleAtFixedRate(
                 () -> {
                     try {
-                        CheckRequest request = bucket.getQueue().poll();
-
-                        // queue empty → stop drainer
-                        if (request == null) {
-                            synchronized (bucket) {
-                                bucket.setDrainerStarted(false);
+                        ScheduledFuture<?> currentFuture = futureReference.get();
+                        synchronized (bucket) {
+                            if (bucket.getDrainerFuture() != currentFuture) {
+                                return;
                             }
-                            bucket.getDrainerFuture().cancel(false);
-                            return;
-                        }
 
-                        log.info("Request processed: clientId={}, endpoint={}",
-                                request.getClientId(), request.getEndpoint());
-
-                        // check again after poll
-                        if (bucket.getQueue().isEmpty()) {
-                            synchronized (bucket) {
+                            CheckRequest request = bucket.getQueue().poll();
+                            if (request == null) {
                                 bucket.setDrainerStarted(false);
+                                bucket.setDrainerFuture(null);
+                                currentFuture.cancel(false);
+                                return;
                             }
-                            bucket.getDrainerFuture().cancel(false);
+
+                            log.info("Request processed: clientId={}, endpoint={}",
+                                    request.getClientId(), request.getEndpoint());
+
+                            if (bucket.getQueue().isEmpty()) {
+                                bucket.setDrainerStarted(false);
+                                bucket.setDrainerFuture(null);
+                                currentFuture.cancel(false);
+                            }
                         }
-                    } catch (Exception e) {
-                        log.error("Drainer error: {}", e.getMessage());
+                    } catch (RuntimeException e) {
+                        log.error("Leaky bucket drainer failed", e);
                     }
                 },
                 intervalMs, intervalMs, TimeUnit.MILLISECONDS
         );
 
+        futureReference.set(future);
         bucket.setDrainerFuture(future);
     }
 }
