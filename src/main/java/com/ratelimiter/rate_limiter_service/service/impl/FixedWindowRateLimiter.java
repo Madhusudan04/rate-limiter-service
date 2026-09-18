@@ -1,9 +1,10 @@
 package com.ratelimiter.rate_limiter_service.service.impl;
 
+import com.ratelimiter.rate_limiter_service.dto.Bucket;
 import com.ratelimiter.rate_limiter_service.dto.CheckRequest;
 import com.ratelimiter.rate_limiter_service.dto.CheckResponse;
-import com.ratelimiter.rate_limiter_service.dto.Bucket;
 import com.ratelimiter.rate_limiter_service.service.RateLimiter;
+import jakarta.annotation.PostConstruct;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
@@ -23,12 +24,18 @@ public class FixedWindowRateLimiter implements RateLimiter {
     @Value("${windowSeconds:60}")
     private int windowSeconds;
 
+    @PostConstruct
+    void validateConfiguration() {
+        if (maxTokens <= 0 || windowSeconds <= 0) {
+            throw new IllegalStateException("maxTokens and windowSeconds must be greater than zero");
+        }
+    }
+
     public CheckResponse allow(CheckRequest request){
         Instant currentTime = Instant.now();
         String clientId = request.getClientId();
         String endpoint = request.getEndpoint();
         CheckResponse response = new CheckResponse();
-        response.setAllowed(true);
 
         Map<String, Bucket> endpointMap = bucketMap.computeIfAbsent(clientId, k -> new ConcurrentHashMap<>());
 
@@ -38,19 +45,26 @@ public class FixedWindowRateLimiter implements RateLimiter {
             Instant  windowStart = bucket.getLocalTime();
             Instant  windowEnd = windowStart.plusSeconds(windowSeconds);
 
-            if(currentTime.isAfter(windowEnd)){
-                bucket.setLocalTime(windowEnd);
+            if(!currentTime.isBefore(windowEnd)){
+                long elapsedWindows = Duration.between(windowStart, currentTime).getSeconds() / windowSeconds;
+                bucket.setLocalTime(windowStart.plusSeconds(Math.max(1L, elapsedWindows) * windowSeconds));
                 bucket.setToken(maxTokens);
-                windowEnd = windowEnd.plusSeconds(windowSeconds);
+                windowEnd = bucket.getLocalTime().plusSeconds(windowSeconds);
             }
 
             if(bucket.getToken() <= 0){
-                long retryAfterSeconds = Duration.between(currentTime, windowEnd).getSeconds();
+                long retryAfterSeconds = (long) Math.ceil(
+                        Duration.between(currentTime, windowEnd).toMillis() / 1000.0);
                 response.setAllowed(false);
-                response.setRetryAfter((int) Math.max(0, retryAfterSeconds));
+                response.setRemaining(0);
+                response.setRetryAfter(Math.max(1, retryAfterSeconds));
+                response.setMessage("Rate limit exceeded");
             }else{
                 bucket.setToken(bucket.getToken() - 1);
+                response.setAllowed(true);
                 response.setRemaining(bucket.getToken());
+                response.setRetryAfter(0);
+                response.setMessage("Request allowed");
             }
         }
 

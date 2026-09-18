@@ -1,0 +1,33 @@
+[ {
+  "id" : "54d43860-e0d9-4c5b-b3b8-0b21cfa0e844",
+  "clientId" : "user-123",
+  "endpoint" : "/api/checkout",
+  "limit" : 5,
+  "windowSeconds" : 60,
+  "algorithm" : "TOKEN_BUCKET",
+  "tier" : "pro"
+}, {
+  "id" : "7609e603-7ff3-4655-a09f-c0e7bedcecae",
+  "clientId" : "user-123",
+  "endpoint" : "/api/*",
+  "limit" : 100,
+  "windowSeconds" : 60,
+  "algorithm" : "SLIDING_WINDOW_COUNTER",
+  "tier" : "pro"
+}, {
+  "id" : "44931f89-f2e3-40fc-b67a-0c90f06e873d",
+  "clientId" : "*",
+  "endpoint" : "/api/*",
+  "limit" : 50,
+  "windowSeconds" : 60,
+  "algorithm" : "TOKEN_BUCKET",
+  "tier" : "default"
+}, {
+  "id" : "559c09e8-75ad-4d74-8862-8b55363b93ea",
+  "clientId" : null,
+  "endpoint" : null,
+  "limit" : 50,
+  "windowSeconds" : 60,
+  "algorithm" : "TOKEN_BUCKET",
+  "tier" : "default"
+} ]
