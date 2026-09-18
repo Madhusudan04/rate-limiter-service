@@ -1,0 +1,8 @@
+target/
+.git/
+.idea/
+*.class
+*.jar
+.DS_Store
+.mvn/
+mvnw.cmd
