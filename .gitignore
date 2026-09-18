@@ -31,3 +31,36 @@ build/
 
 ### VS Code ###
 .vscode/
+*.code-workspace
+
+### macOS ###
+.DS_Store
+.AppleDouble
+.LSOverride
+
+### Windows ###
+Thumbs.db
+*.lnk
+
+### Logs ###
+*.log
+logs/
+docker-build.log
+
+### Runtime Files ###
+rules.json
+*.db
+
+### Environment ###
+.env
+.env.local
+.env.*.local
+
+### IDE temp files ###
+*.swp
+*.swo
+*~
+
+### Java ###
+*.class
+*.jar.orig
